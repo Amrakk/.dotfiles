@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+
+curl -fsSL https://raw.githubusercontent.com/moovweb/gvm/master/binscripts/gvm-installer
+
+gvm install go1.25.1
+gvm use go1.25.1
+
+go install github.com/air-verse/air@latest
+go install golang.org/x/tools/gopls@latest
+go install mvdan.cc/gofumpt@latest
+
+curl -fsSL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b $(go env GOPATH)/bin v2.6.1
+

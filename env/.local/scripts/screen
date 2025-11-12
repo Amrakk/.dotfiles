@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# screen
+# Usage: screen <monitor-name|auto> <scale>
+# Examples:
+#   screen eDP-1 1.25
+#   screen auto 1.5
+
+set -euo pipefail
+
+CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hypr"
+MON_CONF="$CONF_DIR/monitors.conf"
+BACKUP="$MON_CONF.bak.$(date +%Y%m%d%H%M%S)"
+
+usage() {
+  cat <<EOF
+Usage: $0 <monitor-name|auto> <scale>
+  monitor-name  - e.g. eDP-1, DP-1, HDMI-A-1, or "auto" to use first monitor detected
+  scale         - numeric scale (examples: 1, 1.25, 1.5, 2)
+EOF
+  exit 1
+}
+
+if [ $# -lt 2 ]; then
+  usage
+fi
+
+MON_ARG="$1"
+SCALE="$2"
+
+if ! printf '%s' "$SCALE" | grep -Eq '^[0-9]+(\.[0-9]+)?$'; then
+  echo "Invalid scale value: $SCALE"
+  exit 2
+fi
+
+if ! command -v hyprctl >/dev/null 2>&1; then
+  echo "hyprctl not found in PATH. Install Hyprland tools / ensure hyprctl is available."
+  exit 3
+fi
+
+if [ "$MON_ARG" = "auto" ]; then
+  MONITOR="$(hyprctl -j monitors 2>/dev/null | jq -r '.[0].name' 2>/dev/null || true)"
+  if [ -z "$MONITOR" ] || [ "$MONITOR" = "null" ]; then
+    MONITOR="$(hyprctl monitors 2>/dev/null | awk '/^Monitor/ {print $2; exit}' || true)"
+  fi
+else
+  MONITOR="$MON_ARG"
+fi
+
+if [ -z "$MONITOR" ] || [ "$MONITOR" = "null" ]; then
+  echo "Could not detect monitor name. Provide it explicitly (e.g. eDP-1 or DP-1)."
+  exit 4
+fi
+
+mkdir -p "$CONF_DIR"
+cp -a "$MON_CONF" "$BACKUP"
+echo "Backed up existing $MON_CONF -> $BACKUP"
+
+NEW_LINE="monitor = ${MONITOR}, preferred, auto, ${SCALE}"
+if grep -Eq "^[[:space:]]*monitor[[:space:]]*=[[:space:]]*${MONITOR}[[:space:]]*," "$MON_CONF"; then
+  # replace the first matching line
+  awk -v m="$MONITOR" -v nl="$NEW_LINE" '
+    BEGIN{re="^[[:space:]]*monitor[[:space:]]*=[[:space:]]*" m "[[:space:]]*,"}
+    { if (!done && $0 ~ re) { print nl; done=1 } else print $0 }
+    END { if (!done) print nl }
+  ' "$MON_CONF" > "${MON_CONF}.tmp" && mv "${MON_CONF}.tmp" "$MON_CONF"
+  echo "Replaced existing entry for $MONITOR in $MON_CONF"
+else
+  # append
+  printf '\n%s\n' "$NEW_LINE" >> "$MON_CONF"
+  echo "Appended entry for $MONITOR to $MON_CONF"
+fi
+
+if hyprctl reload >/dev/null 2>&1; then
+  echo "Hyprland reload requested. Scale set to $SCALE for monitor $MONITOR."
+  echo "If you see strange rendering (XWayland apps blurry), note that XWayland does not handle fractional scaling cleanly."
+else
+  echo "hyprctl reload failed — your changes are saved to $MON_CONF, but Hyprland did not accept a reload command."
+  echo "You can try 'hyprctl reload' manually or log out/in."
+  exit 5
+fi
+

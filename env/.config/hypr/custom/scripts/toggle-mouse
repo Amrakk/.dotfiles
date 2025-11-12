@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+
+TOUCHPAD_DEVS=("gxtp5100:00-27c6:01e9-1")
+STATE_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/hypr-touchpad.state"
+
+if [ -f "$STATE_FILE" ]; then
+  state=$(cat "$STATE_FILE")
+else
+  state="on"
+fi
+
+if [ "$state" = "on" ]; then
+  for dev in "${TOUCHPAD_DEVS[@]}"; do
+    hyprctl keyword "device[$dev]:enabled" false
+  done
+  echo "off" > "$STATE_FILE"
+  notify-send -a hypr-touchpad "Touchpad" "Touchpad disabled"
+else
+  for dev in "${TOUCHPAD_DEVS[@]}"; do
+    hyprctl keyword "device[$dev]:enabled" true
+  done
+  echo "on" > "$STATE_FILE"
+  notify-send -a hypr-touchpad "Touchpad" "Touchpad enabled"
+fi

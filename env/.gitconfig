@@ -1,0 +1,18 @@
+[credential "https://github.com"]
+	helper = 
+	helper = !/usr/bin/gh auth git-credential
+[credential "https://gist.github.com"]
+	helper = 
+	helper = !/usr/bin/gh auth git-credential
+[user]
+    email = 4mr4kk@gmail.com
+    name = Amrakk
+	signingkey = ~/.ssh/amrakk
+[init]
+	defaultBranch = main
+[credential]
+	helper = store
+[pager]
+	branch = false
+[core]
+	editor = vim

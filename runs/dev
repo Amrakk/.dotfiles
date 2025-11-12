@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+
+sudo pacman -S --noconfirm curl wget grep less gzip tar unzip gvim make wl-clipboard tldr openssh
+
+sudo pacman -S --noconfirm --needed git base-devel github-cli
+sudo pacman -S --noconfirm fcitx5 fcitx5-bamboo
+sudo pacman -S --noconfirm ca-certificates gnupg
+
+yay -S --noconfirm cloudflared kitty-git
