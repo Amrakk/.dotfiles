@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+
+if ! command -v git &> /dev/null; then
+    sudo pacman -S git
+fi
+
+if [ ! -d $HOME/Personal ]; then
+    mkdir $HOME/Personal
+fi
+
+git clone https://github.com/Amrakk/.dotfiles $HOME/Personal/.dotfiles
+
+pushd $HOME/Personal/.dotfiles
+./run
+popd
+

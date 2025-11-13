@@ -6,7 +6,7 @@
 #
 # could be cool!!
 # this means i could create a neovim plugin to shoot commands out to "scratch"
-if [[ "$(pwd)" == $HOME/personal ]]; then
+if [[ "$(pwd)" == $HOME/Personal ]]; then
     clear
     return
 fi
