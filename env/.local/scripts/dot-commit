@@ -6,7 +6,7 @@ git commit -m 'automated dev commit'
 git push origin main
 popd
 
-pushd $HOME/Personcal/.dotfiles
+pushd $HOME/Personal/.dotfiles
 git add .
 git commit -m 'automated dev commit'
 git push origin main
