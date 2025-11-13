@@ -72,3 +72,5 @@ copy $DEV_ENV/dev-env $HOME/.local/scripts/dev-env
 
 sleep 1
 hyprctl reload
+sleep 0.5
+touch $HOME/.config/quickshell/ii/shell.qml

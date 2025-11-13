@@ -1,81 +1,133 @@
 #!/usr/bin/env bash
-# screen
-# Usage: screen <monitor-name|auto> <scale>
-# Examples:
-#   screen eDP-1 1.25
-#   screen auto 1.5
+# Usage: screen [--dry] [--no-reload] <monitor-name|auto> <scale>
+# Writes monitor=NAME,WxH@REFRESH,0x0,scale to ~/.config/hypr/monitors.conf
+# By default the script runs `hyprctl reload` after writing.
+# --dry      : preview only (prints planned actions)
+# --no-reload: do NOT run `hyprctl reload` after writing (reload is ON by default)
 
 set -euo pipefail
 
-CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hypr"
-MON_CONF="$CONF_DIR/monitors.conf"
-BACKUP="$MON_CONF.bak.$(date +%Y%m%d%H%M%S)"
+DRY=0
+DO_RELOAD=1
+ARGS=()
 
-usage() {
-  cat <<EOF
-Usage: $0 <monitor-name|auto> <scale>
-  monitor-name  - e.g. eDP-1, DP-1, HDMI-A-1, or "auto" to use first monitor detected
-  scale         - numeric scale (examples: 1, 1.25, 1.5, 2)
-EOF
-  exit 1
+for a in "$@"; do
+  case "$a" in
+    --dry) DRY=1 ;;
+    --no-reload) DO_RELOAD=0 ;;
+    --reload) DO_RELOAD=1 ;;
+    *) ARGS+=("$a") ;;
+  esac
+done
+
+log() {
+  msg="$1"
+  final="${2:-0}"
+  if [ "${DRY:-0}" -eq 1 ]; then
+    printf '[DRY-RUN] %s\n' "$msg"
+  else
+    if [ "$final" -eq 1 ]; then
+      printf '%s\n' "$msg"
+    fi
+  fi
 }
 
-if [ $# -lt 2 ]; then
-  usage
+ARG1="${ARGS[0]:-}"
+ARG2="${ARGS[1]:-}"
+
+if [ -z "$ARG1" ] || [ -z "$ARG2" ]; then
+  cat <<EOF
+Usage: $0 [--dry] [--no-reload] <monitor-name|auto> <scale>
+  --dry       : preview only (prints planned actions)
+  --no-reload : write file but do not run 'hyprctl reload' (reload is ON by default)
+EOF
+  exit 1
 fi
 
-MON_ARG="$1"
-SCALE="$2"
+MON_ARG="$ARG1"
+REQ_SCALE="$ARG2"
 
-if ! printf '%s' "$SCALE" | grep -Eq '^[0-9]+(\.[0-9]+)?$'; then
-  echo "Invalid scale value: $SCALE"
+if ! printf '%s' "$REQ_SCALE" | grep -Eq '^[0-9]+(\.[0-9]+)?$'; then
+  echo "Invalid scale value: $REQ_SCALE" >&2
   exit 2
 fi
 
-if ! command -v hyprctl >/dev/null 2>&1; then
-  echo "hyprctl not found in PATH. Install Hyprland tools / ensure hyprctl is available."
-  exit 3
-fi
+command -v hyprctl >/dev/null 2>&1 || { echo "hyprctl not found" >&2; exit 3; }
+command -v jq >/dev/null 2>&1 || { echo "jq not found" >&2; exit 4; }
 
 if [ "$MON_ARG" = "auto" ]; then
-  MONITOR="$(hyprctl -j monitors 2>/dev/null | jq -r '.[0].name' 2>/dev/null || true)"
-  if [ -z "$MONITOR" ] || [ "$MONITOR" = "null" ]; then
-    MONITOR="$(hyprctl monitors 2>/dev/null | awk '/^Monitor/ {print $2; exit}' || true)"
-  fi
+  MONITOR="$(hyprctl -j monitors 2>/dev/null | jq -r '.[0].name // empty')"
 else
   MONITOR="$MON_ARG"
 fi
 
-if [ -z "$MONITOR" ] || [ "$MONITOR" = "null" ]; then
-  echo "Could not detect monitor name. Provide it explicitly (e.g. eDP-1 or DP-1)."
-  exit 4
+[ -n "$MONITOR" ] || { echo "Could not detect monitor name." >&2; exit 5; }
+
+QOUT="$(hyprctl -j monitors 2>/dev/null \
+  | jq -r --arg m "$MONITOR" '
+      .[] | select(.name == $m)
+      | "\(.width // 0)\t\(.height // 0)\t\(.refreshRate // 0)\t\(.scale // 1)"
+    ' 2>/dev/null || echo "0\t0\t0\t1")"
+
+read -r WIDTH HEIGHT REFRESH CUR_SCALE <<<"${QOUT//$'\t'/ }"
+
+WIDTH="${WIDTH:-0}"; HEIGHT="${HEIGHT:-0}"
+REFRESH="${REFRESH:-0}"; CUR_SCALE="${CUR_SCALE:-1}"
+
+if [ "$WIDTH" -eq 0 ] || [ "$HEIGHT" -eq 0 ]; then
+  echo "Failed to read monitor resolution for ${MONITOR}." >&2
+  exit 6
 fi
 
-mkdir -p "$CONF_DIR"
-cp -a "$MON_CONF" "$BACKUP"
-echo "Backed up existing $MON_CONF -> $BACKUP"
+REFRESH_FLOOR=$(awk -v r="$REFRESH" 'BEGIN { if (r+0 < 0) printf "%d", -int(-r); else printf "%d", int(r) }')
+REFRESH="${REFRESH_FLOOR:-0}"
 
-NEW_LINE="monitor = ${MONITOR}, preferred, auto, ${SCALE}"
-if grep -Eq "^[[:space:]]*monitor[[:space:]]*=[[:space:]]*${MONITOR}[[:space:]]*," "$MON_CONF"; then
-  # replace the first matching line
-  awk -v m="$MONITOR" -v nl="$NEW_LINE" '
-    BEGIN{re="^[[:space:]]*monitor[[:space:]]*=[[:space:]]*" m "[[:space:]]*,"}
-    { if (!done && $0 ~ re) { print nl; done=1 } else print $0 }
-    END { if (!done) print nl }
-  ' "$MON_CONF" > "${MON_CONF}.tmp" && mv "${MON_CONF}.tmp" "$MON_CONF"
-  echo "Replaced existing entry for $MONITOR in $MON_CONF"
+KEYMODE="${WIDTH}x${HEIGHT}@${REFRESH}"
+KEYWORD="${MONITOR},${KEYMODE},0x0,${REQ_SCALE}"
+
+log "Will write monitor entry:"  
+log "  monitor=${KEYWORD}"       
+log "Current (runtime) scale: ${CUR_SCALE}   Requested: ${REQ_SCALE}"  
+
+MON_CONF="${XDG_CONFIG_HOME:-$HOME/.config}/hypr/monitors.conf"
+MON_DIR="$(dirname "$MON_CONF")"
+mkdir -p "$MON_DIR"
+
+if [ "$DRY" -eq 1 ]; then
+  exit 0
+fi
+
+TMP="$(mktemp "${MON_CONF}.tmp.XXXXXX")"
+if [ -f "$MON_CONF" ]; then
+  awk -v name="$MONITOR" -v entry="monitor=${KEYWORD}" '
+    BEGIN{found=0}
+    {
+      if ($0 ~ /^[[:space:]]*monitor[[:space:]]*=/) {
+        line = $0
+        sub(/^[[:space:]]*monitor[[:space:]]*=[[:space:]]*/, "", line)
+        split(line, parts, ",")
+        if (parts[1] == name) {
+          print entry
+          found=1
+          next
+        }
+      }
+      print $0
+    }
+    END {
+      if (!found) print entry
+    }
+  ' "$MON_CONF" > "$TMP"
 else
-  # append
-  printf '\n%s\n' "$NEW_LINE" >> "$MON_CONF"
-  echo "Appended entry for $MONITOR to $MON_CONF"
+  printf "monitor=%s\n" "${KEYWORD}" > "$TMP"
 fi
 
-if hyprctl reload >/dev/null 2>&1; then
-  echo "Hyprland reload requested. Scale set to $SCALE for monitor $MONITOR."
-  echo "If you see strange rendering (XWayland apps blurry), note that XWayland does not handle fractional scaling cleanly."
-else
-  echo "hyprctl reload failed — your changes are saved to $MON_CONF, but Hyprland did not accept a reload command."
-  echo "You can try 'hyprctl reload' manually or log out/in."
-  exit 5
+mv "$TMP" "$MON_CONF"
+chmod 644 "$MON_CONF"
+
+if [ "$DO_RELOAD" -eq 1 ]; then
+  hyprctl reload
+  log "monitor=${KEYWORD}" 1
 fi
 
+exit 0

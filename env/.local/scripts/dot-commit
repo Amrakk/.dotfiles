@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+
+pushd $HOME/Personal/.dotfiles/env/.config/nvim
+git add .
+git commit -m 'automated dev commit'
+git push
+popd
+
+pushd $HOME/Personcal/.dotfiles
+git add .
+git commit -m 'automated dev commit'
+git push
+popd
+
