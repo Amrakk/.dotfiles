@@ -107,8 +107,10 @@ export PATH="$HOME/go/bin:$PATH"
 export BUN_INSTALL="$HOME/.bun"
 export PATH="$BUN_INSTALL/bin:$PATH"
 
+# Zoxide
 eval "$(zoxide init zsh)"
 
+# Fzf
 export FZF_DEFAULT_OPTS="--height 40% --layout=reverse --border"
 if [[ -r /usr/share/fzf/key-bindings.zsh ]]; then
   source /usr/share/fzf/key-bindings.zsh
