@@ -3,12 +3,12 @@
 pushd $HOME/Personal/.dotfiles/env/.config/nvim
 git add .
 git commit -m 'automated dev commit'
-git push
+git push origin main
 popd
 
 pushd $HOME/Personcal/.dotfiles
 git add .
 git commit -m 'automated dev commit'
-git push
+git push origin main
 popd
 
