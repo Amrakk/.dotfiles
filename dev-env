@@ -27,25 +27,29 @@ log() {
 log "env: $DEV_ENV"
 
 update_files() {
-    log "copying over files from: $1"
-    pushd $1 &> /dev/null
-    (
-        configs=`find . -mindepth 1 -maxdepth 1 -type d`
-        for c in $configs; do
-            directory=${2%/}/${c#./}
-            log "    removing: rm -rf $directory"
+    local src="$1"
+    local dst="${2%/}"
 
-            if [[ $dry_run == "0" ]]; then
-                rm -rf $directory
-            fi
+    log "copying over files from: $src -> $dst"
+    pushd "$src" &> /dev/null || return 1
 
-            log "    copying env: cp $c $2"
-            if [[ $dry_run == "0" ]]; then
-                cp -r ./$c $2
-            fi
-        done
+    # iterate top-level directories safely
+    find . -mindepth 1 -maxdepth 1 -type d -print0 | while IFS= read -r -d '' c; do
+        local name="${c#./}"
+        local directory="$dst/$name"
 
-    )
+        log "    ensure directory: mkdir -p \"$directory\""
+        if [[ $dry_run == "0" ]]; then
+            mkdir -p "$directory"
+        fi
+
+        # sync contents of source dir into destination dir (do NOT rm entire dest)
+        log "    syncing: rsync -a --delete-excluded -- \"$c/\" \"$directory/\""
+        if [[ $dry_run == "0" ]]; then
+            rsync -a -- "$c/" "$directory/"
+        fi
+    done
+
     popd &> /dev/null
 }
 

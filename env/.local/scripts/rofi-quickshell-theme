@@ -1,0 +1,279 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SEQ="${HOME}/.local/state/quickshell/user/generated/terminal/sequences.txt"
+OUT_DIR="${HOME}/.config/rofi"
+OUT_COLORS="${OUT_DIR}/colors-generated.rasi"
+OUT_THEME="${OUT_DIR}/theme-quickshell.rasi"
+
+mkdir -p "${OUT_DIR}"
+
+if [[ ! -r "${SEQ}" ]]; then
+  echo "Missing: ${SEQ}" >&2
+  exit 1
+fi
+
+# ----- Parse OSC sequences -> palette map -----
+# Expected mapping (16-color):
+# 0:black 1:red 2:green 3:yellow 4:blue 5:magenta 6:cyan 7:white
+# 8-15: bright variants
+declare -A P C
+
+# Normalize ESC ] ... \  into plain lines like:
+# ]4;0;#RRGGBB
+raw="$(tr $'\e' $'\n' < "${SEQ}" | tr -d '\\' | tr -d '\r')"
+while IFS= read -r line; do
+  # ]4;IDX;#RRGGBB
+  if [[ "$line" =~ ^\]4\;([0-9]+)\;(\[[0-9]+\])?\#([0-9A-Fa-f]{6})$ ]]; then
+    idx="${BASH_REMATCH[1]}"
+    hex="${BASH_REMATCH[3]}"
+    P["$idx"]="#${hex}"
+    continue
+  fi
+  # ]10;#RRGGBB (foreground)
+  if [[ "$line" =~ ^\](10|11|12|708)\;(\[[0-9]+\])?\#([0-9A-Fa-f]{6})$ ]]; then
+    key="${BASH_REMATCH[1]}"
+    C["$key"]="#${BASH_REMATCH[3]}"
+  fi
+done <<< "${raw}"
+
+# Fallbacks if some terminals omit entries
+fg="${C[10]:-${P[7]:-#c0c0c0}}"
+bg="${C[11]:-${P[0]:-#1a1a1b}}"
+cursor="${C[12]:-${fg}}"
+selbg="${C[708]:-${P[4]:-${bg}}}"
+
+# Map palette indices to names
+black="${P[0]:-${bg}}"
+red="${P[1]:-#cc6666}"
+green="${P[2]:-#7cb36b}"
+yellow="${P[3]:-#f0c674}"
+blue="${P[4]:-#81a2be}"
+magenta="${P[5]:-#b294bb}"
+cyan="${P[6]:-#78bab9}"
+white="${P[7]:-${fg}}"
+
+black_b="${P[8]:-#3c4044}"
+red_b="${P[9]:-#d54e53}"
+green_b="${P[10]:-#71c464}"
+yellow_b="${P[11]:-#e7c547}"
+blue_b="${P[12]:-#7aa6da}"
+magenta_b="${P[13]:-#c397d8}"
+cyan_b="${P[14]:-#6acdcc}"
+white_b="${P[15]:-#eaeaea}"
+
+# ----- Helpers: hex math -----
+hex2dec() { printf "%d" "0x$1"; }
+dec2hex() { printf "%02x" "$1"; }
+clamp() { (( $1 < 0 )) && echo 0 || { (( $1 > 255 )) && echo 255 || echo $1; } }
+
+# Multiply each RGB channel by a factor (0.00–1.00)
+shade() {
+  local hex="${1#\#}" factor="$2"
+  local r g b
+  r=$(hex2dec "${hex:0:2}"); g=$(hex2dec "${hex:2:2}"); b=$(hex2dec "${hex:4:2}")
+  r=$(printf "%.0f" "$(awk -v v="$r" -v f="$factor" 'BEGIN{print v*f}')")
+  g=$(printf "%.0f" "$(awk -v v="$g" -v f="$factor" 'BEGIN{print v*f}')")
+  b=$(printf "%.0f" "$(awk -v v="$b" -v f="$factor" 'BEGIN{print v*f}')")
+  printf "#%s%s%s" "$(dec2hex "$(clamp "$r")")" "$(dec2hex "$(clamp "$g")")" "$(dec2hex "$(clamp "$b")")"
+}
+
+# 66/33 variants = ~0.66x / 0.33x brightness (matches your sample)
+mk66() { shade "$1" 0.66; }
+mk33() { shade "$1" 0.33; }
+
+# Precompute toned sets
+black_66=$(mk66 "${black}");   black_33=$(mk33 "${black}")
+white_66=$(mk66 "${white}");   white_33=$(mk33 "${white}")
+red_66=$(mk66 "${red}");       red_33=$(mk33 "${red}")
+orange="${yellow}"             # keep compatibility; derive from yellow
+orange_b="${yellow_b}"
+orange_66=$(mk66 "${orange}"); orange_33=$(mk33 "${orange}")
+yellow_66=$(mk66 "${yellow}"); yellow_33=$(mk33 "${yellow}")
+green_66=$(mk66 "${green}");   green_33=$(mk33 "${green}")
+cyan_66=$(mk66 "${cyan}");     cyan_33=$(mk33 "${cyan}")
+blue_66=$(mk66 "${blue}");     blue_33=$(mk33 "${blue}")
+magenta_66=$(mk66 "${magenta}"); magenta_33=$(mk33 "${magenta}")
+
+# ----- Write colors-generated.rasi -----
+cat > "${OUT_COLORS}" <<EOF
+/* GENERATED from Quickshell sequences.txt — do not edit */
+* {
+  font: "JetBrains Mono 11";
+
+  black: ${black};
+  white: ${white};
+  red: ${red};
+  orange: ${orange};
+  yellow: ${yellow};
+  green: ${green};
+  cyan: ${cyan};
+  blue: ${blue};
+  magenta: ${magenta};
+
+  black-bright: ${black_b};
+  white-bright: ${white_b};
+  red-bright: ${red_b};
+  orange-bright: ${orange_b};
+  yellow-bright: ${yellow_b};
+  green-bright: ${green_b};
+  cyan-bright: ${cyan_b};
+  blue-bright: ${blue_b};
+  magenta-bright: ${magenta_b};
+
+  black-66: ${black_66};
+  white-66: ${white_66};
+  red-66: ${red_66};
+  orange-66: ${orange_66};
+  yellow-66: ${yellow_66};
+  green-66: ${green_66};
+  cyan-66: ${cyan_66};
+  blue-66: ${blue_66};
+  magenta-66: ${magenta_66};
+
+  black-33: ${black_33};
+  white-33: ${white_33};
+  red-33: ${red_33};
+  orange-33: ${orange_33};
+  yellow-33: ${yellow_33};
+  green-33: ${green_33};
+  cyan-33: ${cyan_33};
+  blue-33: ${blue_33};
+  magenta-33: ${magenta_33};
+
+  /* Common aliases (kept exactly like your boilerplate) */
+  common-background: @black;
+  common-background-bright: @black-bright;
+  common-background-66: @black-66;
+  common-foreground: @white;
+  common-foreground-bright: @white-bright;
+  common-foreground-66: @white-66;
+  common-primary: @yellow;
+  common-primary-bright: @yellow-bright;
+  common-primary-66: @yellow-66;
+  common-primary-33: @yellow-33;
+  common-secondary: @blue;
+  common-secondary-bright: @blue-bright;
+  common-secondary-66: @blue-66;
+  common-secondary-33: @blue-33;
+  common-urgent: @red;
+  common-urgent-bright: @red-bright;
+  common-urgent-66: @red-66;
+  common-urgent-33: @red-33;
+
+  /* Selection & cursor derived from OSC if present */
+  background-color: transparent;
+  selected-normal-background: ${selbg};
+  selected-normal-foreground: @common-primary-bright;
+  selected-normal-border-color: @common-primary-66;
+}
+EOF
+
+# ----- Write boilerplate with import if missing -----
+if [[ ! -f "${OUT_THEME}" ]]; then
+cat > "${OUT_THEME}" <<'EOF'
+@import "colors-generated.rasi"
+
+/* Your original boilerplate follows, unchanged except color import above */
+* {
+    font: "JetBrains Mono 11";
+
+    /* color variables now come from colors-generated.rasi */
+
+    background-color: transparent;
+
+    normal-normal-background: transparent;
+    normal-normal-foreground: @common-foreground;
+    normal-normal-border-color: transparent;
+    normal-active-background: transparent;
+    normal-active-foreground: @common-secondary-bright;
+    normal-active-border-color: transparent;
+    normal-urgent-background: transparent;
+    normal-urgent-foreground: @common-urgent-bright;
+    normal-urgent-border-color: transparent;
+
+    selected-normal-background: @common-primary-33;
+    selected-normal-foreground: @common-primary-bright;
+    selected-normal-border-color: @common-primary-66;
+    selected-active-background: @common-secondary-33;
+    selected-active-foreground: @common-secondary-bright;
+    selected-active-border-color: @common-secondary-66;
+    selected-urgent-background: @common-urgent-33;
+    selected-urgent-foreground: @common-urgent-bright;
+    selected-urgent-border-color: @common-urgent-66;
+
+    alternate-normal-background: @normal-normal-background;
+    alternate-normal-foreground: @normal-normal-foreground;
+    alternate-normal-border-color: @normal-normal-border-color;
+    alternate-active-background: @normal-active-background;
+    alternate-active-foreground: @normal-active-foreground;
+    alternate-active-border-color: @normal-active-border-color;
+    alternate-urgent-background: @normal-urgent-background;
+    alternate-urgent-foreground: @normal-urgent-foreground;
+    alternate-urgent-border-color: @normal-urgent-border-color;
+}
+
+window {
+    /* 85% alpha over @black; computed at draw time by rofi */
+    background-color: @common-background;
+    border: 3;
+    border-color: @black-bright;
+    border-radius: 16;
+    width: 512;
+    height: 460;
+}
+
+mainbox { padding: 16; spacing: 16; }
+
+inputbar {
+    background-color: @black-66;
+    border: 1;
+    border-color: @black-bright;
+    border-radius: 8;
+    padding: 12 16;
+    spacing: 0;
+    text-color: @common-foreground;
+    children: [ "entry", "case-indicator", "num-filtered-rows", "textbox-num-sep", "num-rows"];
+}
+
+prompt { background-color: transparent; text-color: @common-foreground-bright; spacing: 0; text-transform: bold; }
+textbox-prompt-colon { background-color: transparent; text-color: inherit; margin: 0 0.3em 0 0; expand: false; str: ":"; }
+
+entry {
+    background-color: transparent;
+    text-color: @common-foreground-bright;
+    cursor: text;
+    placeholder-color: @common-foreground-66;
+    placeholder: "Type to filter";
+}
+
+case-indicator, num-filtered-rows, textbox-num-sep, num-rows { background-color: transparent; text-color: inherit; }
+textbox-num-sep { expand: false; str: "/"; }
+
+message { background-color: @cyan-33; border: 1; border-color: @cyan-66; border-radius: 8; padding: 16; }
+textbox { background-color: transparent; text-color: @cyan-bright; }
+
+listview { dynamic: true; scrollbar: true; spacing: 0; }
+scrollbar { background-color: transparent; padding: 0; margin: 0 0 0 4; handle-width: 8; border: 0; handle-color: @white-66; }
+
+element { border: 1; border-radius: 8; padding: 6 12; margin: 1 0; spacing: 12; children: [ element-icon, element-text ]; }
+element-icon, element-text { background-color: transparent; text-color: inherit; }
+
+element normal.normal   { background-color: @normal-normal-background; text-color: @normal-normal-foreground; border-color: @normal-normal-border-color; }
+element normal.urgent   { background-color: @normal-urgent-background; text-color: @normal-urgent-foreground; border-color: @normal-urgent-border-color; }
+element normal.active   { background-color: @normal-active-background; text-color: @normal-active-foreground; border-color: @normal-active-border-color; }
+
+element selected.normal { background-color: @selected-normal-background; text-color: @selected-normal-foreground; border-color: @selected-normal-border-color; }
+element selected.urgent { background-color: @selected-urgent-background; text-color: @selected-urgent-foreground; border-color: @selected-urgent-border-color; }
+element selected.active { background-color: @selected-active-background; text-color: @selected-active-foreground; border-color: @selected-active-border-color; }
+
+element alternate.normal { background-color: @alternate-normal-background; text-color: @alternate-normal-foreground; border-color: @alternate-normal-border-color; }
+element alternate.urgent { background-color: @alternate-urgent-background; text-color: @alternate-urgent-foreground; border-color: @alternate-urgent-border-color; }
+element alternate.active { background-color: @alternate-active-background; text-color: @alternate-active-foreground; border-color: @alternate-active-border-color; }
+EOF
+fi
+
+echo "Wrote: ${OUT_COLORS}"
+echo "Ready: ${OUT_THEME}"
+
+

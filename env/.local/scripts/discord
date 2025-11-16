@@ -10,21 +10,16 @@ find_json() {
     "/opt/discord/resources/build_info.json"
   )
   for f in "${candidates[@]}"; do [[ -f "$f" ]] && { echo "$f"; return 0; }; done
-  # last resort: slow search
   mapfile -t found < <(find /usr /opt -type f -path "*/discord*/resources/build_info.json" 2>/dev/null || true)
   [[ ${#found[@]} -gt 0 ]] && { echo "${found[0]}"; return 0; }
   return 1
 }
 
 JSON="$(find_json || true)"
-if [[ -z "${JSON:-}" ]]; then
-  echo "Could not locate build_info.json. Is Discord installed?"
-  exit 1
-fi
+[[ -z "${JSON:-}" ]] && { echo "Could not locate build_info.json"; exit 1; }
 
 ROOT="${JSON%/resources/build_info.json}"
 
-# --- read fields from JSON ----------------------------------------------------
 have() { command -v "$1" >/dev/null 2>&1; }
 
 read_field() {
@@ -32,7 +27,6 @@ read_field() {
   if have jq; then
     jq -r --arg k "$key" '.[$k] // empty' "$JSON"
   else
-    # naive grep/sed fallback (expects simple flat JSON keys)
     grep -oE "\"$key\"[[:space:]]*:[[:space:]]*\"[^\"]+\"" "$JSON" \
       | head -1 | sed -E 's/.*"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/'
   fi
@@ -41,7 +35,7 @@ read_field() {
 LOCAL_CHANNEL="$(read_field releaseChannel)"
 LOCAL_VERSION="$(read_field version)"
 
-# Normalize channel from file; fallback to env CHAN or stable.
+# Normalize/fallback channel
 norm_chan() {
   case "${1,,}" in
     stable|release|"") echo "stable" ;;
@@ -53,72 +47,57 @@ norm_chan() {
 CHAN_FROM_FILE="$(norm_chan "${LOCAL_CHANNEL:-}")"
 CHAN="${CHAN:-$CHAN_FROM_FILE}"
 
-# --- determine the matching binary name to launch -----------------------------
-case "$CHAN" in
-  ptb)    BIN="discord-ptb" ;;
-  canary) BIN="discord-canary" ;;
-  *)      BIN="discord" ;;
-esac
-
-# --- fetch upstream latest version for that channel ---------------------------
-REMOTE_VER=$(
-  curl -sI "https://discord.com/api/download/${CHAN}?platform=linux&format=tar.gz" \
-  | tr -d '\r' \
-  | awk -F': ' 'tolower($1)=="location"{print $2}' \
-  | grep -oE '[0-9]+\.[0-9]+\.[0-9]+'
-)
+# --- FIX 1: resolve a SINGLE upstream URL and extract ONE version -------------
+REMOTE_URL="$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
+  "https://discord.com/api/download/${CHAN}?platform=linux&format=tar.gz")"
+REMOTE_VER="$(printf '%s' "$REMOTE_URL" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
 
 if [[ -z "${REMOTE_VER:-}" ]]; then
-  echo "Unable to resolve upstream version via redirect for channel=$CHAN"
+  echo "Unable to resolve upstream version for channel=$CHAN"
   exit 2
 fi
 
-printf "Detected JSON: %s\n" "$JSON"
-printf "releaseChannel(local): %s  => channel(normalized): %s\n" "${LOCAL_CHANNEL:-<unset>}" "$CHAN"
+# Trim any stray whitespace/newlines just in case
+REMOTE_VER="${REMOTE_VER//$'\n'/}"
+REMOTE_VER="${REMOTE_VER//$'\r'/}"
+
+printf "JSON: %s\n" "$JSON"
+printf "releaseChannel(local): %s  → channel: %s\n" "${LOCAL_CHANNEL:-<unset>}" "$CHAN"
 printf "version(local): %s\n" "${LOCAL_VERSION:-<unset>}"
 printf "version(upstream %s): %s\n" "$CHAN" "$REMOTE_VER"
 
-# --- update build_info.json if mismatch ---------------------------------------
+# --- FIX 2: safe, atomic write (jq OR full rewrite), no sed-patching JSON ----
 if [[ "$LOCAL_VERSION" != "$REMOTE_VER" || -z "${LOCAL_VERSION:-}" ]]; then
-  echo "Version mismatch → updating JSON to ${REMOTE_VER}"
-  sudo cp -n "$JSON" "$JSON.bak.$(date +%s)"
+  echo "Updating build_info.json → version=${REMOTE_VER}, releaseChannel=${CHAN}"
+  mkdir -p "$HOME/.cache/discord-buildinfo/backups"
+  cp -n "$JSON" "$HOME/.cache/discord-buildinfo/backups/build_info.json.bak.$(date +%s)" 2>/dev/null || true
+
+  tmp="$(mktemp)"
   if have jq; then
-    tmp="$(mktemp)"
     jq --arg v "$REMOTE_VER" --arg ch "$CHAN" \
-      '.version=$v | .releaseChannel=$ch' "$JSON" > "$tmp"
-    sudo install -m 0644 "$tmp" "$JSON"
-    rm -f "$tmp"
+       '.version=$v | .releaseChannel=$ch' "$JSON" > "$tmp"
   else
-    # Ensure releaseChannel exists and version is set (sed-only fallback)
-    # 1) set or replace "version"
-    sudo sed -i -E "{
-      s/(\"version\"[[:space:]]*:[[:space:]]*\")[^\"]*(\")/\1${REMOTE_VER}\2/;
-      t donev;
-      $ a\\
-\"version\": \"${REMOTE_VER}\"
-      :donev
-    }" "$JSON"
-    # 2) set or replace "releaseChannel"
-    sudo sed -i -E "{
-      s/(\"releaseChannel\"[[:space:]]*:[[:space:]]*\")[^\"]*(\")/\1${CHAN}\2/;
-      t donec;
-      1 i\\
-\"releaseChannel\": \"${CHAN}\",
-      :donec
-    }" "$JSON"
+    # Recreate minimal correct JSON
+    printf '{\n  "releaseChannel": "%s",\n  "version": "%s"\n}\n' \
+      "$CHAN" "$REMOTE_VER" > "$tmp"
   fi
+  cat "$tmp" > "$JSON"
+  rm -f "$tmp"
   echo "build_info.json updated."
 else
   echo "Local version already matches upstream."
 fi
 
-# --- launch Discord -----------------------------------------------------------
-if command -v "$BIN" >/dev/null 2>&1; then
-  exec "$BIN"
-elif [[ -x "$ROOT/Discord" ]]; then
-  exec "$ROOT/Discord"
-else
-  echo "Could not find executable for channel=$CHAN (tried $BIN and $ROOT/Discord)."
-  exit 3
+# --- LAUNCH real Electron binary directly (avoid recursion) -------------------
+REAL_BIN="$ROOT/Discord"
+if [[ -x "$REAL_BIN" ]]; then
+  exec "$REAL_BIN" "$@"
 fi
+
+for cand in "/usr/lib/discord/Discord" "/usr/lib/discord-ptb/Discord" "/usr/lib/discord-canary/Discord"; do
+  [[ -x "$cand" ]] && exec "$cand" "$@"
+done
+
+echo "Could not find the real Discord binary (expected $ROOT/Discord)."
+exit 3
 
