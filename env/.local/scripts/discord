@@ -1,5 +1,38 @@
 #!/usr/bin/env bash
 set -euo pipefail
+set -o errtrace
+
+notify() {
+  if command -v notify-send >/dev/null 2>&1; then
+    notify-send "Discord Updater" "$1"
+  fi
+}
+
+print_stacktrace() {
+  echo "Stack trace (most recent call last):" >&2
+  local i=0
+  while caller $i; do
+    ((i++))
+  done >&2
+}
+
+fail() {
+  local exit_code=${1:-1}
+  local lineno=${2:-0}
+  local msg=${3:-"Fatal error"}
+  notify "Discord Updater: ${msg} (code ${exit_code})"
+  echo "ERROR: ${msg} (exit ${exit_code}) at line ${lineno}" >&2
+  print_stacktrace
+  exit "$exit_code"
+}
+
+_on_err() {
+  local exit_code=$?
+  local lineno=${BASH_LINENO[0]:-0}
+  local cmd="${BASH_COMMAND:-<unknown>}"
+  fail "$exit_code" "$lineno" "Unexpected error running: ${cmd}"
+}
+trap _on_err ERR
 
 # --- locate build_info.json (Arch typical paths) ------------------------------
 find_json() {
@@ -16,7 +49,7 @@ find_json() {
 }
 
 JSON="$(find_json || true)"
-[[ -z "${JSON:-}" ]] && { echo "Could not locate build_info.json"; exit 1; }
+[[ -z "${JSON:-}" ]] && fail 1 0 "Could not locate build_info.json"
 
 ROOT="${JSON%/resources/build_info.json}"
 
@@ -35,7 +68,6 @@ read_field() {
 LOCAL_CHANNEL="$(read_field releaseChannel)"
 LOCAL_VERSION="$(read_field version)"
 
-# Normalize/fallback channel
 norm_chan() {
   case "${1,,}" in
     stable|release|"") echo "stable" ;;
@@ -47,17 +79,14 @@ norm_chan() {
 CHAN_FROM_FILE="$(norm_chan "${LOCAL_CHANNEL:-}")"
 CHAN="${CHAN:-$CHAN_FROM_FILE}"
 
-# --- FIX 1: resolve a SINGLE upstream URL and extract ONE version -------------
+# --- upstream version resolution ----------------------------------------------
 REMOTE_URL="$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
-  "https://discord.com/api/download/${CHAN}?platform=linux&format=tar.gz")"
+  "https://discord.com/api/download/${CHAN}?platform=linux&format=tar.gz")" \
+  || fail $? ${LINENO} "Failed resolving Discord upstream URL"
+
 REMOTE_VER="$(printf '%s' "$REMOTE_URL" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+[[ -z "${REMOTE_VER:-}" ]] && fail 2 ${LINENO} "Unable to extract upstream version for channel=${CHAN}"
 
-if [[ -z "${REMOTE_VER:-}" ]]; then
-  echo "Unable to resolve upstream version for channel=$CHAN"
-  exit 2
-fi
-
-# Trim any stray whitespace/newlines just in case
 REMOTE_VER="${REMOTE_VER//$'\n'/}"
 REMOTE_VER="${REMOTE_VER//$'\r'/}"
 
@@ -66,38 +95,51 @@ printf "releaseChannel(local): %s  → channel: %s\n" "${LOCAL_CHANNEL:-<unset>}
 printf "version(local): %s\n" "${LOCAL_VERSION:-<unset>}"
 printf "version(upstream %s): %s\n" "$CHAN" "$REMOTE_VER"
 
-# --- FIX 2: safe, atomic write (jq OR full rewrite), no sed-patching JSON ----
+# --- update build_info.json ---------------------------------------------------
 if [[ "$LOCAL_VERSION" != "$REMOTE_VER" || -z "${LOCAL_VERSION:-}" ]]; then
   echo "Updating build_info.json → version=${REMOTE_VER}, releaseChannel=${CHAN}"
   mkdir -p "$HOME/.cache/discord-buildinfo/backups"
   cp -n "$JSON" "$HOME/.cache/discord-buildinfo/backups/build_info.json.bak.$(date +%s)" 2>/dev/null || true
 
-  tmp="$(mktemp)"
+  tmp="$(mktemp)" || fail 3 ${LINENO} "mktemp failed"
   if have jq; then
     jq --arg v "$REMOTE_VER" --arg ch "$CHAN" \
-       '.version=$v | .releaseChannel=$ch' "$JSON" > "$tmp"
+       '.version=$v | .releaseChannel=$ch' "$JSON" > "$tmp" \
+       || fail 4 ${LINENO} "jq failed while writing new build_info.json"
   else
-    # Recreate minimal correct JSON
     printf '{\n  "releaseChannel": "%s",\n  "version": "%s"\n}\n' \
-      "$CHAN" "$REMOTE_VER" > "$tmp"
+      "$CHAN" "$REMOTE_VER" > "$tmp" \
+      || fail 5 ${LINENO} "Fallback JSON write failed"
   fi
-  cat "$tmp" > "$JSON"
+  cat "$tmp" > "$JSON" || fail 6 ${LINENO} "Failed to overwrite build_info.json"
   rm -f "$tmp"
-  echo "build_info.json updated."
+  notify "Discord updated to ${REMOTE_VER} (${CHAN})"
 else
   echo "Local version already matches upstream."
 fi
 
-# --- LAUNCH real Electron binary directly (avoid recursion) -------------------
+# --- LAUNCH real Electron binary (do NOT use exec so we can capture failures) ---
+launch_binary_and_catch() {
+  local bin="$1"
+  shift
+  echo "Launching: $bin $*"
+  if [[ -x "$bin" ]]; then
+    # run directly so we can inspect exit code and print stacktrace on failure
+    "$bin" "$@" || fail $? ${LINENO} "Discord binary failed to start: ${bin}"
+  else
+    return 1
+  fi
+}
+
 REAL_BIN="$ROOT/Discord"
-if [[ -x "$REAL_BIN" ]]; then
-  exec "$REAL_BIN" "$@"
+if launch_binary_and_catch "$REAL_BIN" "$@"; then
+  exit 0
 fi
 
 for cand in "/usr/lib/discord/Discord" "/usr/lib/discord-ptb/Discord" "/usr/lib/discord-canary/Discord"; do
-  [[ -x "$cand" ]] && exec "$cand" "$@"
+  if launch_binary_and_catch "$cand" "$@"; then
+    exit 0
+  fi
 done
 
-echo "Could not find the real Discord binary (expected $ROOT/Discord)."
-exit 3
-
+fail 3 ${LINENO} "Could not find real Discord binary (expected ${ROOT}/Discord)"
