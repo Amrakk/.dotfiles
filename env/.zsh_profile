@@ -22,7 +22,7 @@ bindkey -s '\es' "tmux-sessionizer -s 3\n"
 
 bindkey ^n forward-word
 bindkey ^n autosuggest-accept
-bindkey '^H' backward-kill-word 
+bindkey '^H' backward-kill-word
 bindkey '^Z' undo
 
 catr() {
@@ -92,7 +92,7 @@ alias l='ls -CF'
 alias pacnam='pacman'
 alias pamcan='pacman'
 
-# VIM 
+# VIM
 alias vim="nvim"
 
 #######################################################
