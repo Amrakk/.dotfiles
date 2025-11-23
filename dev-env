@@ -74,7 +74,7 @@ copy $DEV_ENV/env/.zshrc $HOME/.zshrc
 copy $DEV_ENV/env/.tmux-sessionizer $HOME/.tmux-sessionizer
 copy $DEV_ENV/dev-env $HOME/.local/scripts/dev-env
 
-sleep 1
-hyprctl reload
 sleep 0.5
-touch $HOME/.config/quickshell/ii/shell.qml
+hyprctl reload
+#sleep 1
+#touch $HOME/.config/quickshell/ii/shell.qml
