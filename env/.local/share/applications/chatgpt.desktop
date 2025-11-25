@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=ChatGPT
+Exec=/opt/google/chrome/google-chrome --profile-directory=Default --app=https://chat.openai.com/
+Icon=/home/amrakk/.local/share/icons/chatgpt.png
+Terminal=false
+Categories=Utility
+

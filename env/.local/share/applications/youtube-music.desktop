@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Youtube Music
+Exec=/opt/google/chrome/google-chrome --profile-directory=Default --app=https://music.youtube.com/
+Icon=/home/amrakk/.local/share/icons/youtube-music.png
+Terminal=false
+Categories=Utility
+
