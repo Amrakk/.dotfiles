@@ -16,7 +16,7 @@ Scope { // Scope
     property var tabButtonList: [
         {
             "icon": "keyboard_command_key",
-            "name": Translation.tr("Vim Shortcuts")
+            "name": Translation.tr("Vim")
         },
         {
             "icon": "keyboard",
